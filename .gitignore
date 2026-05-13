@@ -21,7 +21,6 @@ report.*.json
 
 # Runtime state
 sellauth-state.json
-tiktok-feed-state.json
 
 # OS
 .DS_Store

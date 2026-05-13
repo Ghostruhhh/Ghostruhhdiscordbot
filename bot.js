@@ -22,8 +22,6 @@ const {
   ButtonStyle,
 } = require("discord.js");
 
-const Parser = require("rss-parser");
-
 // ============================================================
 // CONSTANTS
 // ============================================================
@@ -81,25 +79,6 @@ const SELLAUTH_API_KEY          = (process.env.SELLAUTH_API_KEY          || file
 const SELLAUTH_SHOP_ID          = (process.env.SELLAUTH_SHOP_ID          || fileConfig.sellauthShopId          || "231922").trim();
 const SELLAUTH_SALES_CHANNEL_ID = (process.env.SELLAUTH_SALES_CHANNEL_ID || fileConfig.sellauthSalesChannelId || "1503108866517242090").trim();
 const STOREFRONT_REFRESH_SECONDS = Math.max(30, parseInt(process.env.STOREFRONT_REFRESH_SECONDS || fileConfig.storefrontRefreshSeconds || "120", 10) || 120);
-
-// ── TikTok → Discord announcements (RSS; TikTok has no native Discord hook) ──
-// Prefer `tiktokRssUrl` from e.g. https://rss.app (paste https://www.tiktok.com/@yourhandle ).
-// Fallback: derive from `tiktokUsername` + RSSHub `/tiktok/user/@handle`.
-// Many VPS IPs get HTTP 403 on public RSSHub — if feeds fail, set `tiktokRssUrl`.
-
-const RSSHUB_ORIGIN                  = (process.env.RSSHUB_ORIGIN               || fileConfig.rsshubOrigin             || "https://rsshub.app").replace(/\/$/, "");
-
-function rssHubTikTokUserFeedUrl(username) {
-  const u = String(username || "").replace(/^@/, "").replace(/[^\w.-]/g, "");
-  return u ? `${RSSHUB_ORIGIN}/tiktok/user/@${u}` : "";
-}
-
-const TIKTOK_USERNAME              = (process.env.TIKTOK_USERNAME              || fileConfig.tiktokUsername            || "galaxyproducts1").trim();
-
-const TIKTOK_RSS_URL_RAW             = (process.env.TIKTOK_RSS_URL             || fileConfig.tiktokRssUrl               || "").trim();
-const TIKTOK_RSS_URL                 = TIKTOK_RSS_URL_RAW || rssHubTikTokUserFeedUrl(TIKTOK_USERNAME);
-const TIKTOK_ANNOUNCE_CHANNEL_ID     = (process.env.TIKTOK_ANNOUNCE_CHANNEL_ID   || fileConfig.tiktokAnnounceChannelId   || "1495301617338290348").trim();
-const TIKTOK_POLL_SECONDS            = Math.max(120, parseInt(process.env.TIKTOK_POLL_SECONDS || fileConfig.tiktokPollSeconds || "300", 10) || 300);
 
 // ============================================================
 // REACTION ROLES CONFIG
@@ -437,207 +416,6 @@ function startStorefrontAutoRefresh(client) {
   if (!SELLAUTH_API_KEY) return;
   setInterval(() => autoRefreshStorefront(client), STOREFRONT_REFRESH_SECONDS * 1000);
   console.log(`✅ Storefront auto-refresh every ${STOREFRONT_REFRESH_SECONDS}s`);
-}
-
-// ============================================================
-// TIKTOK RSS → DISCORD
-// ============================================================
-const TIKTOK_STATE_FILE = path.join(__dirname, "tiktok-feed-state.json");
-
-function loadTikTokFeedState() {
-  const data = readJSON(TIKTOK_STATE_FILE, { initialized: false, seen: [] });
-  return {
-    initialized: !!data.initialized,
-    seen: Array.isArray(data.seen) ? data.seen : [],
-  };
-}
-
-function saveTikTokFeedState(state) {
-  writeJSON(TIKTOK_STATE_FILE, {
-    initialized: state.initialized,
-    seen: (state.seen || []).slice(-120),
-  });
-}
-
-const rssParser = new Parser({
-  timeout: 25_000,
-  headers: {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    Accept: "application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.8",
-  },
-});
-
-function normalizeTikTokFeedItems(feed) {
-  return (feed?.items || [])
-    .map((i) => {
-      const link = String(i.link || i.guid || i.id || "").trim();
-      const title = String(i.title || "").trim();
-      const date = i.pubDate || i.isoDate || "";
-      const thumbUrlRaw = String(i.enclosure?.url || "").trim();
-      const thumbUrl = /^https?:\/\//i.test(thumbUrlRaw) ? thumbUrlRaw : "";
-      return link ? { link, title, date, thumbUrl } : null;
-    })
-    .filter(Boolean);
-}
-
-async function pollTikTokRssFeed(client) {
-  if (!TIKTOK_RSS_URL || !TIKTOK_ANNOUNCE_CHANNEL_ID) return;
-
-  let feed;
-  try {
-    feed = await rssParser.parseURL(TIKTOK_RSS_URL);
-  } catch (err) {
-    console.warn("⚠️  TikTok RSS fetch failed:", err.message);
-    return;
-  }
-
-  const channel = await client.channels.fetch(TIKTOK_ANNOUNCE_CHANNEL_ID).catch(() => null);
-  if (!channel?.isTextBased?.()) {
-    console.warn("⚠️  TikTok announce channel unavailable or not text-based.");
-    return;
-  }
-
-  const items = normalizeTikTokFeedItems(feed);
-
-  let state = loadTikTokFeedState();
-  const seen = new Set(state.seen || []);
-
-  if (!state.initialized) {
-    for (const it of items) seen.add(it.link);
-    state = { initialized: true, seen: [...seen].slice(-120) };
-    saveTikTokFeedState(state);
-    console.log(`✅ TikTok RSS seeded (${seen.size} existing item(s)); new uploads will post to <#${TIKTOK_ANNOUNCE_CHANNEL_ID}>`);
-    return;
-  }
-
-  const newcomers = items.filter((it) => !seen.has(it.link));
-  newcomers.sort((a, b) => {
-    const ta = Date.parse(a.date || "") || 0;
-    const tb = Date.parse(b.date || "") || 0;
-    return ta - tb;
-  });
-
-  for (const it of newcomers) {
-    const embed = new EmbedBuilder()
-      .setColor(0xfe2c55)
-      .setTitle(it.title || "New TikTok")
-      .setURL(it.link)
-      .setDescription(`[Open on TikTok](${it.link})`)
-      .setFooter({ text: "TikTok" });
-
-    const ts = it.date ? Date.parse(it.date) : NaN;
-    if (!Number.isNaN(ts)) embed.setTimestamp(new Date(ts));
-    else embed.setTimestamp();
-
-    if (it.thumbUrl) embed.setImage(it.thumbUrl);
-
-    await channel.send({ embeds: [embed] }).catch((e) =>
-      console.error("❌ TikTok announce send failed:", e.message),
-    );
-    seen.add(it.link);
-  }
-
-  if (newcomers.length) {
-    state = { initialized: true, seen: [...seen].slice(-120) };
-    saveTikTokFeedState(state);
-  }
-}
-
-function startTikTokRssPolling(client) {
-  if (!TIKTOK_RSS_URL) {
-    console.log("⚠️  TikTok announcements disabled — set `tiktokUsername` and/or `tiktokRssUrl` in config.json (or env).");
-    return;
-  }
-  void pollTikTokRssFeed(client);
-  setInterval(() => void pollTikTokRssFeed(client), TIKTOK_POLL_SECONDS * 1000);
-  const rssSource = TIKTOK_RSS_URL_RAW ? "custom RSS URL" : `RSSHub (@${TIKTOK_USERNAME.replace(/^@/, "")})`;
-  console.log(`✅ TikTok RSS poll every ${TIKTOK_POLL_SECONDS}s → <#${TIKTOK_ANNOUNCE_CHANNEL_ID}> (${rssSource})`);
-}
-
-async function handleTiktokTestStatus(interaction) {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  if (!TIKTOK_RSS_URL) {
-    return interaction.editReply(
-      "❌ No TikTok feed resolved. Put `tiktokUsername` **or** `tiktokRssUrl` in `config.json` (or `TIKTOK_USERNAME` / `TIKTOK_RSS_URL`).",
-    );
-  }
-
-  let feed;
-  try {
-    feed = await rssParser.parseURL(TIKTOK_RSS_URL);
-  } catch (err) {
-    return interaction.editReply(`❌ RSS fetch failed: **${err.message}**`);
-  }
-
-  const items = normalizeTikTokFeedItems(feed);
-  const state = loadTikTokFeedState();
-  const unseen = items.filter((it) => !(state.seen || []).includes(it.link)).length;
-
-  const channel = interaction.client.channels.cache.get(TIKTOK_ANNOUNCE_CHANNEL_ID)
-    || await interaction.client.channels.fetch(TIKTOK_ANNOUNCE_CHANNEL_ID).catch(() => null);
-
-  let destLine = "❓ Could not load channel.";
-  if (!channel?.isTextBased?.()) destLine = "❌ Target is not text-based or missing.";
-  else {
-    try {
-      const me = interaction.client.user.id;
-      const perms = channel.permissionsFor?.(me);
-      if (perms?.has(PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages))
-        destLine = `✅ Announce target: ${channel}`;
-      else
-        destLine = `⚠️ I may lack **Send Messages / View Channel** on ${channel}.`;
-    } catch (_) {
-      destLine = `${channel}`;
-    }
-  }
-
-  const sample = [...items]
-    .sort((a, b) => (Date.parse(b.date || "") || 0) - (Date.parse(a.date || "") || 0))
-    .slice(0, 5)
-    .map((it) => {
-      const t = it.title.slice(0, 80);
-      const line = `\u2022 [${t}](${it.link})`;
-      return line.length > 256 ? `\u2022 ${it.link}` : line;
-    })
-    .join("\n");
-
-  const handleLine = `@${TIKTOK_USERNAME.replace(/^@/, "")}`;
-  const sourceLine = TIKTOK_RSS_URL_RAW
-    ? "Custom URL (`tiktokRssUrl`)"
-    : `RSSHub (${RSSHUB_ORIGIN}) → \`/tiktok/user/${handleLine}\``;
-  const urlLine      = `\`${TIKTOK_RSS_URL.length > 500 ? `${TIKTOK_RSS_URL.slice(0, 497)}…` : TIKTOK_RSS_URL}\``;
-
-  const embed = new EmbedBuilder()
-    .setColor(0xfe2c55)
-    .setTitle("TikTok RSS — diagnostics")
-    .addFields(
-      { name: "TikTok / feed source", value: `${handleLine}\n${sourceLine}`.slice(0, 1024), inline: false },
-      { name: "Resolved feed URL", value: urlLine.slice(0, 1024), inline: false },
-      { name: "Feed title", value: feed.title?.slice(0, 512) || "—", inline: false },
-      { name: "Items in feed", value: `${items.length}`, inline: true },
-      { name: "Tracked / seeded", value: state.initialized ? `${(state.seen || []).length} link(s)` : "First poll not done yet", inline: true },
-      { name: "Unseen vs tracker", value: state.initialized ? `${unseen} not in tracker` : "— will seed on next poll", inline: true },
-      { name: "Announce channel check", value: destLine.slice(0, 1024), inline: false },
-      { name: "Latest entries (sample)", value: sample.slice(0, 1024) || "_(empty feed)_", inline: false },
-    )
-    .setTimestamp();
-
-  return interaction.editReply({ embeds: [embed] });
-}
-
-async function handleTiktokTestPoll(interaction) {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  if (!TIKTOK_RSS_URL) {
-    return interaction.editReply(
-      "❌ No TikTok feed resolved. Put `tiktokUsername` **or** `tiktokRssUrl` in `config.json` (or `TIKTOK_USERNAME` / `TIKTOK_RSS_URL`).",
-    );
-  }
-
-  await pollTikTokRssFeed(interaction.client);
-  return interaction.editReply(
-    `✅ Poll finished.\nAnything **new since the tracker was seeded** was posted (if any) in <#${TIKTOK_ANNOUNCE_CHANNEL_ID}>.\nUse \`/tiktoktest status\` to inspect the RSS without posting.`,
-  );
 }
 
 // ============================================================
@@ -1003,13 +781,6 @@ const commands = [
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
 
-  new SlashCommandBuilder()
-    .setName("tiktoktest")
-    .setDescription("Test the TikTok → Discord notifier")
-    .addSubcommand(s => s.setName("status").setDescription("RSS preview (does not post to the TikTok channel)"))
-    .addSubcommand(s => s.setName("poll").setDescription("Run the RSS poll now (posts unseen TikToks like the timer)"))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
   // ── Help ─────────────────────────────────────────────────
   new SlashCommandBuilder()
     .setName("help")
@@ -1231,8 +1002,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             ["/stock post",    "Post the live storefront embed"],
             ["/stock refresh", "Refresh the storefront with latest stock"],
             ["/stock remove",  "Remove the storefront embed"],
-            ["/tiktoktest status", "Admin: TikTok RSS diagnostic (no post)"],
-            ["/tiktoktest poll",   "Admin: run TikTok announce poll now"],
           ],
         },
         fun: {
@@ -2077,25 +1846,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // ── TIKTOK TEST (RSS notifier) ─────────────────────────
-    if (cmd === "tiktoktest") {
-      if (!interaction.guild || !interaction.memberPermissions) {
-        return interaction.reply({
-          content: "❌ Use this command inside your server.",
-          flags: MessageFlags.Ephemeral,
-        });
-      }
-      if (!interaction.memberPermissions.has(PermissionFlagsBits.Administrator)) {
-        return interaction.reply({
-          content: "❌ You need **Administrator** to run this.",
-          flags: MessageFlags.Ephemeral,
-        });
-      }
-      const tiktokSub = interaction.options.getSubcommand(true);
-      if (tiktokSub === "status") return handleTiktokTestStatus(interaction);
-      return handleTiktokTestPoll(interaction);
-    }
-
     // ── QUOTE (Finnhub) ────────────────────────────────────
     if (cmd === "quote") {
       if (!FINNHUB_API_KEY) {
@@ -2293,7 +2043,6 @@ client.once(Events.ClientReady, async (readyClient) => {
   await registerCommands();
   loadSellAuthState();
   startStorefrontAutoRefresh(readyClient);
-  startTikTokRssPolling(readyClient);
   console.log("🚀 Bot is fully online and ready");
 });
 
