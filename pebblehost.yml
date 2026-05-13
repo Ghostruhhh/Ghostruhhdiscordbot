@@ -12,6 +12,11 @@ proxy-port=
 # (keep under your plan RAM — e.g. 896 with 1024M server.) That applies to ALL node
 # processes (including Git pull), unlike the npm "start" line in package.json.
 #
+# EXTRAS THAT BREAK PEBBLE GIT SYNC:
+# Never push a backup branch with OLD fat git history on this same repo (e.g. archive/*).
+# Default git fetch pulls those refs → Pebble updateGit blows heap (~598 MB). Keep backups on
+# your PC only, or another repo/fork — NOT extra branches here.
+#
 # AFTER force-push / rewritten main (crash STILL happens): Pebble keeps an OLD clone on disk.
 # "git pull" merges unrelated histories → huge merge → heap OOM ~598 MB BEFORE npm runs.
 # Fix ON THE PANEL (pick one):
