@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node --max-old-space-size=768 bot.js"
   },
   "dependencies": {
     "discord.js": "14.20.0",

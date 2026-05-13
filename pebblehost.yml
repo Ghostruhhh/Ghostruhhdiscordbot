@@ -6,6 +6,16 @@ proxy-domain=
 # Reverse Proxy Port
 proxy-port=
 
+## Node.js heap / Pebble Git OOM ("JavaScript heap out of memory" in /opt/start.js updateGit):
+# In the bot panel → Environment Variables, add exactly:
+#   NODE_OPTIONS = --max-old-space-size=896
+# (keep under your plan RAM — e.g. 896 with 1024M server.) That applies to ALL node
+# processes (including Git pull), unlike the npm "start" line in package.json.
+#
+# If Git errors after force-push: Dashboard → wipe/reset cached repo clone if Pebble offers it,
+# or disable Git Integration once and re-link the same repo URL + branch main.
+#
+
 ## Git Management
 #
 #Please configure these options from within your panel under Tools > Git Management
