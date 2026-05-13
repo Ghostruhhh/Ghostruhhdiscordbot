@@ -1,0 +1,28 @@
+# Secrets / config
+config.json
+.env
+.env.*
+
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build / cache / logs
+tmp/
+.cache/
+logs/
+*.log
+report.*.json
+
+# PebbleHost / runtime
+.pebblegit
+.git-log.txt
+.template
+
+# Runtime state
+sellauth-state.json
+tiktok-feed-state.json
+
+# OS
+.DS_Store
+Thumbs.db

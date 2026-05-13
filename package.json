@@ -1,0 +1,16 @@
+{
+  "name": "discord-bot",
+  "version": "1.0.0",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "14.20.0",
+    "rss-parser": "^3.13.0"
+  },
+  "nodeVersion": "23.5.0",
+  "description": "An example application - make sure to configure this yourself.",
+  "file": "bot.js",
+  "author": "Pebblehost"
+}
