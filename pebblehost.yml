@@ -12,8 +12,11 @@ proxy-port=
 # (keep under your plan RAM — e.g. 896 with 1024M server.) That applies to ALL node
 # processes (including Git pull), unlike the npm "start" line in package.json.
 #
-# If Git errors after force-push: Dashboard → wipe/reset cached repo clone if Pebble offers it,
-# or disable Git Integration once and re-link the same repo URL + branch main.
+# AFTER force-push / rewritten main (crash STILL happens): Pebble keeps an OLD clone on disk.
+# "git pull" merges unrelated histories → huge merge → heap OOM ~598 MB BEFORE npm runs.
+# Fix ON THE PANEL (pick one):
+#   • Git tools → reinstall / reset repo / wipe workspace (exact wording varies), OR
+#   • Turn OFF Git Integration → turn ON again + same repo URL + branch main (fresh clone).
 #
 
 ## Git Management
