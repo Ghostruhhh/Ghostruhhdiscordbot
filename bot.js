@@ -192,6 +192,35 @@ let storefrontPost = null; // { channelId, messageId }
 const STOREFRONT_FAIL_LOG_INTERVAL_MS = 10 * 60 * 1000;
 let storefrontFailLog = { t: 0, key: "", quiet: 0 };
 let sellAuthAutoRefreshPreviouslyFailed = false;
+/** Cleared interval when SellAuth returns 401/403 so we stop hammering the API every refresh tick. */
+let storefrontAutoRefreshIntervalId = null;
+let storefrontAutoRefreshSuspendedBadAuth = false;
+
+function sellAuthUnauthorizedMessage(text) {
+  return /\bSellAuth API (401|403)\b/.test(String(text ?? ""));
+}
+
+function suspendStorefrontAutoRefreshForBadSellAuth(reason) {
+  storefrontAutoRefreshSuspendedBadAuth = true;
+  if (storefrontAutoRefreshIntervalId !== null) {
+    clearInterval(storefrontAutoRefreshIntervalId);
+    storefrontAutoRefreshIntervalId = null;
+  }
+  console.warn(
+    `⚠️  Storefront auto-refresh stopped — SellAuth API key rejected (${squashOneLine(String(reason), 220)}). ` +
+      "Create or rotate your key under Dashboard → Account → API Access (Bearer token). " +
+      "Set `SELLAUTH_API_KEY` or `sellauthApiKey`, confirm `SELLAUTH_SHOP_ID` / `sellauthShopId` matches your shop, restart the bot, then `/stock refresh`."
+  );
+}
+
+function resumeStorefrontAutoRefreshTimer(client) {
+  if (!storefrontAutoRefreshSuspendedBadAuth) return;
+  if (!SELLAUTH_API_KEY) return;
+  storefrontAutoRefreshSuspendedBadAuth = false;
+  if (storefrontAutoRefreshIntervalId !== null) clearInterval(storefrontAutoRefreshIntervalId);
+  storefrontAutoRefreshIntervalId = setInterval(() => autoRefreshStorefront(client), STOREFRONT_REFRESH_SECONDS * 1000);
+  console.log(`✅ Storefront auto-refresh restarted (SellAuth accepts the key; every ${STOREFRONT_REFRESH_SECONDS}s)`);
+}
 
 function loadSellAuthState() {
   const data = readJSON(SELLAUTH_STATE_FILE, { storefront: null });
@@ -408,13 +437,20 @@ async function autoRefreshStorefront(client) {
     storefrontFailLog = { t: 0, key: "", quiet: 0 };
   } catch (err) {
     sellAuthAutoRefreshPreviouslyFailed = true;
-    logStorefrontRefreshFailure(err?.message ?? String(err));
+    const reason = err?.message ?? String(err);
+    if (sellAuthUnauthorizedMessage(reason)) {
+      suspendStorefrontAutoRefreshForBadSellAuth(reason);
+      return;
+    }
+    logStorefrontRefreshFailure(reason);
   }
 }
 
 function startStorefrontAutoRefresh(client) {
   if (!SELLAUTH_API_KEY) return;
-  setInterval(() => autoRefreshStorefront(client), STOREFRONT_REFRESH_SECONDS * 1000);
+  storefrontAutoRefreshSuspendedBadAuth = false;
+  if (storefrontAutoRefreshIntervalId !== null) clearInterval(storefrontAutoRefreshIntervalId);
+  storefrontAutoRefreshIntervalId = setInterval(() => autoRefreshStorefront(client), STOREFRONT_REFRESH_SECONDS * 1000);
   console.log(`✅ Storefront auto-refresh every ${STOREFRONT_REFRESH_SECONDS}s`);
 }
 
@@ -1808,6 +1844,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const msg      = await targetChannel.send({ embeds: [embed] });
           storefrontPost = { channelId: targetChannel.id, messageId: msg.id };
           saveSellAuthState();
+          resumeStorefrontAutoRefreshTimer(interaction.client);
           return interaction.editReply(`✅ Posted storefront in ${targetChannel} (${products.length} products). [Jump](${msg.url})`);
         }
 
@@ -1825,6 +1862,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const products = await fetchAllSellAuthProducts();
           const embed    = buildStorefrontEmbed(products);
           await msg.edit({ embeds: [embed] });
+          resumeStorefrontAutoRefreshTimer(interaction.client);
           return interaction.editReply(`✅ Refreshed storefront (${products.length} products). [Jump](${msg.url})`);
         }
 
@@ -2051,6 +2089,10 @@ client.once(Events.ClientReady, async (readyClient) => {
 // ============================================================
 function shutdown(signal) {
   console.log(`\n⏹️  ${signal} received, shutting down...`);
+  if (storefrontAutoRefreshIntervalId !== null) {
+    clearInterval(storefrontAutoRefreshIntervalId);
+    storefrontAutoRefreshIntervalId = null;
+  }
   client.destroy().finally(() => process.exit(0));
   // Hard-exit fallback in case destroy hangs.
   setTimeout(() => process.exit(0), 5000).unref();
